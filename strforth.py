@@ -3,6 +3,7 @@
 # TODO: implement syscall words
 # TODO: implement function definitions
 # TODO: implement function calls
+# FIXME: comments raise empty error
 
 """
 linux x86_64 syscall table
