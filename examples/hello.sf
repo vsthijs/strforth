@@ -1,2 +1,5 @@
-"Hello, World!" print
-0 exit
+"Hello, World!"  # push a string
+
+print  # print that string
+
+0 exit  # push 0 and exit with that code
