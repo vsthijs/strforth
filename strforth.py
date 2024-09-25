@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import subprocess
 from typing import Generator, Any, Literal, TypeAlias
 import sys
+import os
 
 
 LONGSTRINGCNT = 8
@@ -427,7 +428,12 @@ def exec_cmd(cmd: list[str], check: bool = True):
         )
 
 
-def compile_file(file: str, of: str):
+def echo_cmd(cmd: list[str]):
+    print(">", *cmd)
+    subprocess.call(cmd)
+
+
+def compile_file(file: str, of: str, keep_artifacts: bool):
     with open(file) as f:
         compiler = NasmAmd64Linux(list(parse(lex(f.read(), file))))
     compiler.process_ast()
@@ -438,6 +444,10 @@ def compile_file(file: str, of: str):
         f.write(compiler._get_asm())
     exec_cmd(["nasm", "-felf64", asmfile])
     exec_cmd(["ld", ofile, "-o", of])
+
+    if not keep_artifacts:
+        os.remove(asmfile)
+        os.remove(ofile)
 
 
 def shift(xs):
@@ -467,9 +477,7 @@ def main():
     runargs: list[str] = []
 
     # simple flags with their flag names and default values
-    flags: dict[str, bool] = {
-        "run": False,
-    }
+    flags: dict[str, bool] = {"run": False, "artifacts": False}
 
     if len(argv) <= 0:
         show_usage()
@@ -499,6 +507,10 @@ def main():
                     outfile, argv = shift(argv)  # -o a.out
                 else:
                     outfile = arg.removeprefix("-o")  # -oa.out
+            elif arg == "-r":
+                flags["run"] = True
+            else:
+                fatal_err(f"unknown commandline flag: {arg}")
         else:
             if inpfile:
                 fatal_err("can't compile multiple source files")
@@ -512,12 +524,12 @@ def main():
         outfile = inpfile.removesuffix(".sf")
 
     try:
-        compile_file(inpfile, outfile)
+        compile_file(inpfile, outfile, flags["artifacts"])
     except Exception as e:
         fatal_err(str(e))
 
     if flags["run"]:
-        exec_cmd([outfile, *runargs], False)
+        echo_cmd([outfile, *runargs])
 
 
 if __name__ == "__main__":
