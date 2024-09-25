@@ -1,5 +1,5 @@
-"Hello, World!"  # push a string
+"Hello, World!\n"  ( push a string )
 
-print  # print that string
+1 1 syscall3  ( print that string to stdout )
 
-0 exit  # push 0 and exit with that code
+0 60 syscall1  ( push 0 and exit with that code )
