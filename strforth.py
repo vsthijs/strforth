@@ -2,7 +2,7 @@
 
 # TODO: implement syscall words
 # TODO: implement function definitions
-# TODO: implement function calls
+# TODO: implement function calls in compilation
 
 """
 linux x86_64 syscall table
@@ -24,6 +24,38 @@ LONGSTRINGCNT = 8
 SHORTSTRINGCNT = 2
 MICROSTRINGCNT = 1
 STRINGCNT = SHORTSTRINGCNT
+
+
+def escape_string(s: str) -> str:
+    for old, new in {
+        "\\t": "\t",
+        "\\n": "\n",
+        "\\0": "\0",
+        "\\\\": "\\",
+    }.items():
+        s = s.replace(old, new)
+    return s
+
+
+def nasm_string(s: str) -> str:
+    """converts 'Hello World!\n' to 'Hello World!', 10 for nasm"""
+    special_chars = {"\t": 9, "\n": 10}
+    line = ""
+    instring = False
+    for ii in s:
+        if ii in special_chars:
+            if instring:
+                line += '", '
+                instring = False
+            line += f"{special_chars[ii]}, "
+        else:
+            if not instring:
+                line += '"'
+                instring = True
+            line += ii
+    if instring:
+        line += '"'
+    return line.removeprefix(", ")
 
 
 def fatal_err(
@@ -146,7 +178,7 @@ def lex(source: str, file: str):
                 data += source[ip]
                 ip += 1
             ip += 1
-            yield Token("string", data, file, countlines(source[:ip]))
+            yield Token("string", escape_string(data), file, countlines(source[:ip]))
         elif ch.isspace():
             while ip < len(source) and source[ip].isspace():
                 ip += 1
@@ -174,7 +206,8 @@ def lex(source: str, file: str):
 def parse(lexer: Generator[Token, Any, None]):
     tokens = list(lexer)
 
-    def inner_parse(ip: int) -> tuple[AstNode, int]:
+    def inner_parse(ip: int) -> tuple[AstNode | None, int]:
+        assert ip < len(tokens)
         if tokens[ip] == ":":  # function definition
             # : <name> <definition> ;
             ip += 2
@@ -204,7 +237,7 @@ def parse(lexer: Generator[Token, Any, None]):
                 elif tokens[ip] == ")":
                     level -= 1
                 ip += 1
-            return inner_parse(ip)
+            return None, ip
         elif tokens[ip] == "[" or tokens[ip] == "{":  # conditional or loop block
             start = tokens[ip].data
             assert isinstance(start, str)
@@ -234,37 +267,8 @@ def parse(lexer: Generator[Token, Any, None]):
     ip = 0
     while ip < len(tokens):
         el, ip = inner_parse(ip)
-        yield el
-
-
-# def evaluate(expr: AstNode, stack: list[int | str | bool]):
-# if isinstance(expr, LiteralValue):
-#     stack.append(expr.value)
-# elif isinstance(expr, Word):
-#     if expr.name == "dbg":
-#         print(stack.pop())
-#     elif expr.name == "dup":
-#         stack.append(stack[-1])
-#     elif expr.name == "dec":
-#         assert isinstance((val := stack.pop()), int)
-#         stack.append(val - 1)
-#     else:
-#         assert False
-# elif isinstance(expr, FunctionDef):
-#     assert False
-# elif isinstance(expr, Block):
-#     if expr.kind == "cond":
-#         if stack.pop() != 0:
-#             for inex in expr.inner:
-#                 evaluate(inex, stack)
-#     elif expr.kind == "loop":
-#         while True:
-#             for inex in expr.inner:
-#                 evaluate(inex, stack)
-#             if stack.pop() == 0:
-#                 break
-# else:
-#     assert False
+        if el:
+            yield el
 
 
 DataType = Literal["int", "bool", "str"]
@@ -272,17 +276,34 @@ builtin_words = ["dbg"]
 
 
 class NasmAmd64Linux:
+    # TODO: add .bss section for the datastack
+
     def __init__(self, prog: list[AstNode]) -> None:
         self.asts = prog
         self.checker: list[DataType] = []
-        self.curr_func = "_start"
-        self.funcs: dict[str, list[str]] = {"_start": []}
-        self.block_bumps: dict[str, int] = {"_start": 0}
-        self.curr_scope = []
+
+        self.funcs: dict[str, list[str]] = {}
+        self.curr_func: str | None = None
+        self.toplevel: list[str] = []
+        self.scope: list[str] = []
+
+        self.block_bump = 0
+
         self.literals: list[tuple[str, Any]] = []
 
+        self._switch_stack()
+
     def _ret(self):
-        self.curr_func = self.curr_scope.pop()
+        self._switch_stack()
+        self._inst("ret")
+
+    def _finalize_fn(self):
+        self.curr_func = self.scope.pop()
+        self._ret()
+
+    def _call(self, name: str):
+        self._switch_stack()
+        self._inst(f"call {name}")
 
     def stexpect(self, *types: DataType) -> bool:
         """Expect one of the given data types."""
@@ -297,16 +318,24 @@ class NasmAmd64Linux:
             self._inst("pop rax")
             self._inst("push rax")
             self._inst("push rax")
-        elif word == "dec":
+        elif word.startswith("syscall") and len(word) == 8:
+            argn = int(word[-1])
             self._inst("pop rax")
-            self._inst("dec rax")
-            self._inst("push rax")
-        elif word == "exit":
-            assert self.stexpect("int")
-            self._inst("mov rax, 60")
-            self._inst("pop rdi")
+            if argn >= 1:
+                self._inst("pop rdi")
+            if argn >= 2:  # etc.
+                self._inst("pop rsi")
+            if argn >= 3:  # syscall3
+                self._inst("pop rdx")
+            if argn >= 4:  # syscall4
+                self._inst("pop r10")
+            if argn >= 5:  # syscall5
+                self._inst("pop r8")
+            if argn >= 6:  # syscall6
+                self._inst("pop r9")
             self._inst("syscall")
-        elif word == "print":
+            self._inst("push rax")
+        elif word == "print":  # TODO: replace with std library function
             # fd  | buf | count
             # rdi | rsi | rdx
             assert self.stexpect("str")
@@ -323,10 +352,18 @@ class NasmAmd64Linux:
             assert False, f"unknown word: {word}"
 
     def _switch_stack(self):
-        assert False
+        for ii in [
+            "mov rax, rsp",
+            "mov rsp, [__strforth_altstack]",
+            "mov [__strforth_altstack], rax",
+        ]:
+            self._inst(ii)
 
     def _inst(self, line: str):
-        self.funcs[self.curr_func].append(line)
+        if self.curr_func:
+            self.funcs[self.curr_func].append(line)
+        else:
+            self.toplevel.append(line)
 
     def _push_bool(self, val: bool):
         self.checker.append("bool")
@@ -340,35 +377,40 @@ class NasmAmd64Linux:
         return f"_sf_lit_{len(self.literals)}"
 
     def _new_block_id(self) -> str:
-        self.block_bumps[self.curr_func] += 1
-        return f".{self.block_bumps[self.curr_func]-1}"
+        self.block_bump += 1
+        return f".{self.block_bump-1}"
 
     def _push_str(self, val: str):
         self.checker.append("str")
         literal = self._new_literal_id()
         self.literals.append((literal, val))
+        self._push_int(len(val.encode()))
         self._inst(f"push {literal}")
 
     def _get_asm(self) -> str:
-        asm: list[str] = ["section .data"]
+        asm: list[str] = [
+            "section .bss",
+            "__strforth_datastack: resb 4096",
+            "section .data",
+            "__strforth_altstack: dq __strforth_datastack + 4096",
+        ]
         for name, value in self.literals:
             if isinstance(value, str):
-                definst = {1: "db", 2: "dw", 4: "dd", 8: "dq"}[STRINGCNT]
-                asm.append(f"{name}: {definst} {len(value.encode())+1}")
-                asm.append(f'{len(name)*" "}  db "{value}", 10, 0')
+                asm.append(f"{name}: db {nasm_string(value)}")
 
         asm.append("section .text")
         asm.append("global _start")
         for func in self.funcs:
             asm.append(f"{func}:")
-            if func != "_start":
-                asm.append(f"  jmp .end")  # dont execute, but only define
-            asm.append(f".start:")
+            asm.append(f"  jmp {func}.end")  # dont execute, but only define
             for inst in self.funcs[func]:
                 indent = 0 if inst.endswith(":") else 2
                 asm.append(" " * indent + inst)
-            asm.append(f".end:")
-        asm.append("ret")
+            asm.append(f"{func}.end:")
+        asm.append("_start:")
+        for inst in self.toplevel:
+            indent = 0 if inst.endswith(":") else 2
+            asm.append(" " * indent + inst)
         return "\n".join(asm) + "\n"
 
     def _conditional(self, inner: list[AstNode]):
@@ -524,12 +566,13 @@ def main():
     assert isinstance(inpfile, str), "unreachable: type checker"
 
     if outfile is None:
-        outfile = inpfile.removesuffix(".sf")
+        outfile = "./" + inpfile.removesuffix(".sf")
 
     try:
         compile_file(inpfile, outfile, flags["artifacts"])
     except Exception as e:
-        fatal_err(str(e))
+        # fatal_err(str(e))
+        raise e
 
     if flags["run"]:
         echo_cmd([outfile, *runargs])
