@@ -3,7 +3,6 @@
 # TODO: implement syscall words
 # TODO: implement function definitions
 # TODO: implement function calls
-# FIXME: comments raise empty error
 
 """
 linux x86_64 syscall table
@@ -151,6 +150,10 @@ def lex(source: str, file: str):
         elif ch.isspace():
             while ip < len(source) and source[ip].isspace():
                 ip += 1
+        elif ch == "#":
+            while ip < len(source) and source[ip] != "\n":
+                ip += 1
+            ip += 1
         else:
             data = ""
             while ip < len(source) and not source[ip].isspace():
@@ -317,7 +320,7 @@ class NasmAmd64Linux:
             self._inst("mov rax, 1")
             self._inst("syscall")
         else:  # ?
-            assert False
+            assert False, f"unknown word: {word}"
 
     def _switch_stack(self):
         assert False
