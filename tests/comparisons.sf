@@ -1,0 +1,27 @@
+(
+    checking boolean and conditionals
+)
+
+false
+[ 1 60 syscall1 ]
+
+true
+not [ 1 60 syscall1 ]
+
+(
+    should be true. 60 syscall1 if false
+)
+
+1 1 =
+not [ 1 60 syscall1 ]
+
+1 2 <
+not [ 1 60 syscall1 ]
+
+2 1 >
+not [ 1 60 syscall1 ]
+
+1 2 !=
+not [ 1 60 syscall1 ]
+
+0 60 syscall1

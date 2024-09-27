@@ -353,7 +353,7 @@ class NasmAmd64Linux:
             self._inst("pop rax")
             self._inst("neg rax")
             self._inst("push rax")
-        elif word == "neg":
+        elif word == "not":
             self._inst("pop rax")
             self._inst("test rax, rax")
             self._inst("sete al")
@@ -506,7 +506,7 @@ def exec_cmd(cmd: list[str], check: bool = True):
 
 def echo_cmd(cmd: list[str]):
     print(">", *cmd)
-    subprocess.call(cmd)
+    return subprocess.call(cmd)
 
 
 def compile_file(file: str, of: str, keep_artifacts: bool):
@@ -545,6 +545,19 @@ def show_usage():
     )
 
 
+def test_file(ifile: str) -> tuple[bool, str]:
+    print(f"=== Compiling {ifile} ===")
+    try:
+        compile_file(ifile, (ofile := ifile.removesuffix(".sf")), False)
+    except Exception as e:
+        print(e)
+        return False, (str(e))
+    print(f"=== Running {ofile} ===")
+    if echo_cmd(["./" + ofile]) != 0:
+        return False, "runtime error"
+    return True, "Ok"
+
+
 def main():
     global program_name
     program_name, argv = shift(sys.argv)
@@ -553,7 +566,7 @@ def main():
     runargs: list[str] = []
 
     # simple flags with their flag names and default values
-    flags: dict[str, bool] = {"run": False, "artifacts": False}
+    flags: dict[str, bool] = {"run": False, "artifacts": False, "test-all": False}
 
     if len(argv) <= 0:
         show_usage()
@@ -592,21 +605,47 @@ def main():
                 fatal_err("can't compile multiple source files")
             inpfile = arg
 
-    if inpfile is None:
-        fatal_err("no source file given")
-    assert isinstance(inpfile, str), "unreachable: type checker"
+    if flags["test-all"]:
+        if inpfile is None:
+            fatal_err("no directory path given")
+        assert isinstance(inpfile, str), "unreachable: type checker"
+        if not os.path.exists(inpfile):
+            fatal_err("directory does not exist")
+        if not os.path.isdir(inpfile):
+            fatal_err("given path is not a directory")
+        all_files = list(
+            filter(
+                lambda x: x.endswith(".sf"),
+                (os.path.join(inpfile, ii) for ii in os.listdir(inpfile)),
+            )
+        )
+        if len(all_files) == 0:
+            fatal_err("no files to test")
 
-    if outfile is None:
-        outfile = "./" + inpfile.removesuffix(".sf")
+        failed_tests: list[str] = []
+        for ii in all_files:
+            status, msg = test_file(ii)
+            if not status:
+                failed_tests.append(ii)
+        print("=== Test result ===")
+        print(f"ran {len(all_files)} tests, of which {len(failed_tests)} failed:")
+        print(", ".join(failed_tests))
+    else:
+        if inpfile is None:
+            fatal_err("no source file given")
+        assert isinstance(inpfile, str), "unreachable: type checker"
 
-    try:
-        compile_file(inpfile, outfile, flags["artifacts"])
-    except Exception as e:
-        # fatal_err(str(e))
-        raise e
+        if outfile is None:
+            outfile = "./" + inpfile.removesuffix(".sf")
 
-    if flags["run"]:
-        echo_cmd([outfile, *runargs])
+        try:
+            compile_file(inpfile, outfile, flags["artifacts"])
+        except Exception as e:
+            # fatal_err(str(e))
+            raise e
+
+        if flags["run"]:
+            echo_cmd([outfile, *runargs])
 
 
 if __name__ == "__main__":
