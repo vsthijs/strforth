@@ -305,18 +305,59 @@ class NasmAmd64Linux:
         self._switch_stack()
         self._inst(f"call {name}")
 
-    def stexpect(self, *types: DataType) -> bool:
-        """Expect one of the given data types."""
-        if len(self.checker) <= 0:
-            return False
-        return self.checker.pop() in types
-
     def comp_word(self, word: str):
+        self._inst(f"; {word}")
         if word in ["true", "false"]:
             self._push_bool({"true": True, "false": False}[word])
         elif word == "dup":
             self._inst("pop rax")
             self._inst("push rax")
+            self._inst("push rax")
+        elif word == "drop":
+            self._inst("pop rax")
+        elif word == "swap":
+            self._inst("pop rbx")
+            self._inst("pop rax")
+            self._inst("push rbx")
+            self._inst("push rax")
+        elif word in ["+", "-", "*"]:
+            self._inst("pop rbx")
+            self._inst("pop rax")
+            self._inst({"+": "add", "-": "sub", "*": "mul"}[word] + " rax, rbx")
+            self._inst("push rax")
+        elif word == "divmod":
+            self._inst("pop rax")
+            self._inst("pop rbx")
+            self._inst("xor rdx, rdx")
+            self._inst("div rbx")  # now rax contains the quotient and rdx the modulus.
+            self._inst("push rax")
+            self._inst("push rdx")
+        elif word in ["=", ">", "<", "!=", ">=", "<="]:
+            self._inst("pop rcx")
+            self._inst("pop rbx")
+            self._inst("cmp rcx, rbx")
+            self._inst(
+                {
+                    "=": "setz",
+                    ">": "setl",
+                    "<": "setg",
+                    "!=": "setnz",
+                    ">=": "setle",
+                    "<=": "setge",
+                }[word]
+                + " al"
+            )
+            self._inst("movzx rax, al")
+            self._inst("push rax")
+        elif word == "-":
+            self._inst("pop rax")
+            self._inst("neg rax")
+            self._inst("push rax")
+        elif word == "neg":
+            self._inst("pop rax")
+            self._inst("test rax, rax")
+            self._inst("sete al")
+            self._inst("movzx rax, al")
             self._inst("push rax")
         elif word.startswith("syscall") and len(word) == 8:
             argn = int(word[-1])
@@ -335,19 +376,6 @@ class NasmAmd64Linux:
                 self._inst("pop r9")
             self._inst("syscall")
             self._inst("push rax")
-        elif word == "print":  # TODO: replace with std library function
-            # fd  | buf | count
-            # rdi | rsi | rdx
-            assert self.stexpect("str")
-            self._inst("pop rax")
-            asmtype = {1: "BYTE", 2: "WORD", 4: "DWORD", 8: "QWORD"}[STRINGCNT]
-            self._inst("xor rdx, rdx")
-            self._inst(f"mov dx, {asmtype} [rax]")
-            self._inst("mov rsi, rax")
-            self._inst(f"add rsi, {STRINGCNT}")
-            self._inst("mov rdi, 1")
-            self._inst("mov rax, 1")
-            self._inst("syscall")
         else:  # ?
             assert False, f"unknown word: {word}"
 
@@ -366,11 +394,11 @@ class NasmAmd64Linux:
             self.toplevel.append(line)
 
     def _push_bool(self, val: bool):
-        self.checker.append("bool")
+        self._inst(f"; push {str(val).lower()}")
         self._inst(f"push {int(val)}")
 
     def _push_int(self, val: int):
-        self.checker.append("int")
+        self._inst(f"; push {val}")
         self._inst(f"push {val}")
 
     def _new_literal_id(self) -> str:
@@ -381,7 +409,8 @@ class NasmAmd64Linux:
         return f".{self.block_bump-1}"
 
     def _push_str(self, val: str):
-        self.checker.append("str")
+        comment_string = val.replace("\n", "\\n")
+        self._inst(f"; push '{comment_string}'")
         literal = self._new_literal_id()
         self.literals.append((literal, val))
         self._push_int(len(val.encode()))
@@ -414,6 +443,7 @@ class NasmAmd64Linux:
         return "\n".join(asm) + "\n"
 
     def _conditional(self, inner: list[AstNode]):
+        self._inst(f"; conditional")
         begin = self._new_block_id()
         end = self._new_block_id()
         self._inst("pop rax")
@@ -425,6 +455,7 @@ class NasmAmd64Linux:
         self._inst(end + ":")
 
     def _loop(self, inner: list[AstNode]):
+        self._inst(f"; loop")
         begin = self._new_block_id()
         end = self._new_block_id()
         self._inst(begin + ":")
