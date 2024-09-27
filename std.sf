@@ -1,0 +1,22 @@
+( Linux syscalls )
+
+: write
+    1 syscall3
+;
+
+: exit
+    60 syscall1
+;
+
+( Linux constants )
+
+: stdout 1 ;
+
+: EXIT_SUCCESS 0 ;
+: EXIT_FAILURE 1 ;
+
+( Other std word )
+
+: print
+    stdout write
+;

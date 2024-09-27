@@ -1,0 +1,3 @@
+include "std.sf"
+
+"Hello, World!\n" print

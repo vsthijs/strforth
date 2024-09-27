@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# TODO: include statement
+
 """
 linux x86_64 syscall table
 
@@ -254,6 +256,15 @@ def parse(lexer: Generator[Token, Any, None]):
                 ),
                 ip,
             )
+        elif tokens[ip] == "include":
+            path = tokens[ip + 1]
+            assert path.kind == "string"
+            assert isinstance(path.data, str)
+            ip += 2
+            with open(path.data) as f:
+                for off, ii in enumerate(lex(f.read(), path.data)):
+                    tokens.insert(ip + off, ii)
+            return None, ip
         elif tokens[ip].kind == "word":
             ip += 1
             return Word(tokens[ip - 1]), ip
