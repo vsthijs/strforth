@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 
-# TODO: implement syscall words
-# TODO: implement function definitions
-# TODO: implement function calls in compilation
-
 """
 linux x86_64 syscall table
 
@@ -18,6 +14,7 @@ import subprocess
 from typing import Generator, Any, Literal, TypeAlias
 import sys
 import os
+import traceback
 
 
 LONGSTRINGCNT = 8
@@ -143,12 +140,10 @@ class Block(AstNode):
 
 
 class FunctionDef(AstNode):
-    name: str | None
+    name: str
     inner: list[AstNode]
 
-    def __init__(
-        self, name: str | None, inner: list[AstNode], file: str, line: int
-    ) -> None:
+    def __init__(self, name: str, inner: list[AstNode], file: str, line: int) -> None:
         super().__init__(file, line)
         self.name, self.inner = name, inner
 
@@ -216,7 +211,8 @@ def parse(lexer: Generator[Token, Any, None]):
             body = []
             while ip < len(tokens) and tokens[ip] != ";":
                 el, ip = inner_parse(ip)
-                body.append(el)
+                if el:
+                    body.append(el)
             ip += 1
             return (
                 FunctionDef(
@@ -246,7 +242,8 @@ def parse(lexer: Generator[Token, Any, None]):
             body = []
             while ip < len(tokens) and tokens[ip] != end:
                 el, ip = inner_parse(ip)
-                body.append(el)
+                if el:
+                    body.append(el)
             ip += 1
             return (
                 Block(
@@ -285,7 +282,7 @@ class NasmAmd64Linux:
         self.funcs: dict[str, list[str]] = {}
         self.curr_func: str | None = None
         self.toplevel: list[str] = []
-        self.scope: list[str] = []
+        self.scope: list[str | None] = []
 
         self.block_bump = 0
 
@@ -298,12 +295,13 @@ class NasmAmd64Linux:
         self._inst("ret")
 
     def _finalize_fn(self):
-        self.curr_func = self.scope.pop()
         self._ret()
+        self.curr_func = self.scope.pop()
 
     def _call(self, name: str):
         self._switch_stack()
         self._inst(f"call {name}")
+        self._switch_stack()
 
     def comp_word(self, word: str):
         self._inst(f"; {word}")
@@ -376,11 +374,15 @@ class NasmAmd64Linux:
                 self._inst("pop r9")
             self._inst("syscall")
             self._inst("push rax")
+        elif word in self.funcs:
+            self._call(word)
         else:  # ?
             assert False, f"unknown word: {word}"
 
     def _switch_stack(self):
+        # print(__file__ + ":" + str(sys._getframe().f_back.f_lineno) + ": " + str(sys._getframe().f_back.f_code.co_name) + ": " + str(self.curr_func))  # type: ignore
         for ii in [
+            "; === Switch stacks ===",
             "mov rax, rsp",
             "mov rsp, [__strforth_altstack]",
             "mov [__strforth_altstack], rax",
@@ -429,14 +431,14 @@ class NasmAmd64Linux:
 
         asm.append("section .text")
         asm.append("global _start")
+        asm.append("_start:")
         for func in self.funcs:
-            asm.append(f"{func}:")
             asm.append(f"  jmp {func}.end")  # dont execute, but only define
+            asm.append(f"{func}:")
             for inst in self.funcs[func]:
                 indent = 0 if inst.endswith(":") else 2
                 asm.append(" " * indent + inst)
             asm.append(f"{func}.end:")
-        asm.append("_start:")
         for inst in self.toplevel:
             indent = 0 if inst.endswith(":") else 2
             asm.append(" " * indent + inst)
@@ -466,8 +468,20 @@ class NasmAmd64Linux:
         self._inst(f"jne {begin}")  # jump to the end if 0
         self._inst(end + ":")
 
-    def func_def(self, name: str | None, inner: list[AstNode]):
-        assert False
+    def func_def(self, name: str, inner: list[AstNode]):
+        self.scope.append(self.curr_func)
+        self.curr_func = name
+        self.funcs[name] = []
+
+        if len(inner) < 1:
+            print(f"warning: {name} has empty definition")
+            self._inst("ret")
+            self.curr_func = self.scope.pop()
+        else:
+            self._switch_stack()
+            for ii in inner:
+                self._process_node(ii)
+            self._finalize_fn()
 
     def _process_node(self, node: AstNode):
         if isinstance(node, LiteralValue):
@@ -487,7 +501,7 @@ class NasmAmd64Linux:
             elif node.kind == "loop":
                 self._loop(node.inner)
         else:
-            assert False
+            assert False, type(node)
 
     def process_ast(self):
         while len(self.asts) > 0:
@@ -550,7 +564,7 @@ def test_file(ifile: str) -> tuple[bool, str]:
     try:
         compile_file(ifile, (ofile := ifile.removesuffix(".sf")), False)
     except Exception as e:
-        print(e)
+        traceback.print_exc()
         return False, (str(e))
     print(f"=== Running {ofile} ===")
     if echo_cmd(["./" + ofile]) != 0:
@@ -645,7 +659,7 @@ def main():
             raise e
 
         if flags["run"]:
-            echo_cmd([outfile, *runargs])
+            exit(echo_cmd([outfile, *runargs]))
 
 
 if __name__ == "__main__":

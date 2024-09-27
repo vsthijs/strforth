@@ -1,0 +1,9 @@
+: exit 60 syscall1 ;
+
+: result
+    : inner 0 ;
+    inner
+;
+
+1 ( if result does not push 0, this 1 will be there, so the statuscode will be 1 (error))
+result exit
