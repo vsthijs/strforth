@@ -1,22 +1,37 @@
 ( Linux syscalls )
 
-: write
-    1 syscall3
+: write ( str int -- )
+    1 syscall3 drop
 ;
 
-: exit
+: exit ( int -- ! )
     60 syscall1
 ;
 
-( Linux constants )
+( POSIX constants )
 
 : stdout 1 ;
 
 : EXIT_SUCCESS 0 ;
 : EXIT_FAILURE 1 ;
 
-( Other std word )
+( Other std words )
 
-: print
+: puts ( str -- )
     stdout write
 ;
+
+: 0= ( int -- bool )
+    0 = ;
+
+: 0> ( int -- bool )
+    0 > ;
+
+: 0< ( int -- bool )
+    0 < ;
+
+: -- ( int -- int )
+    1 - ;
+
+: ++ ( int -- int )
+    1 + ;
