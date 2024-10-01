@@ -36,6 +36,18 @@ def escape_string(s: str) -> str:
     return s
 
 
+def encode_nasm(s: str) -> str:
+    for ii in filter(
+        lambda x: x
+        not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$#@~.?",
+        s,
+    ):
+        s = s.replace(ii, f"#{ord(ii):03}")
+    if not s[0].isalpha():
+        s = "_" + s
+    return s
+
+
 def nasm_string(s: str) -> str:
     """converts 'Hello World!\n' to 'Hello World!', 10 for nasm"""
     special_chars = {"\t": 9, "\n": 10}
@@ -139,6 +151,18 @@ class Block(AstNode):
                 ("]" if self.kind == "cond" else "}"),
             ]
         )
+
+
+class Reservation(AstNode):
+    name: str
+    size: int
+
+    def __init__(self, size: int, name: str, file: str, line: int) -> None:
+        super().__init__(file, line)
+        self.name, self.size = name, size
+
+    def __str__(self) -> str:
+        return f"reserve {self.size} {self.name}"
 
 
 class FunctionDef(AstNode):
@@ -265,6 +289,13 @@ def parse(lexer: Generator[Token, Any, None]):
                 for off, ii in enumerate(lex(f.read(), path.data)):
                     tokens.insert(ip + off, ii)
             return None, ip
+        elif tokens[ip] == "reserve":
+            size = tokens[ip + 1]
+            name = tokens[ip + 2]
+            ip += 3
+            assert size.kind == "integer" and name.kind == "word"
+            assert isinstance(size.data, int) and isinstance(name.data, str)
+            return Reservation(size.data, name.data, size.file, size.line), ip
         elif tokens[ip].kind == "word":
             ip += 1
             return Word(tokens[ip - 1]), ip
@@ -284,16 +315,15 @@ builtin_words = ["dbg"]
 
 
 class NasmAmd64Linux:
-    # TODO: add .bss section for the datastack
-
     def __init__(self, prog: list[AstNode]) -> None:
         self.asts = prog
-        self.checker: list[DataType] = []
 
         self.funcs: dict[str, list[str]] = {}
         self.curr_func: str | None = None
         self.toplevel: list[str] = []
         self.scope: list[str | None] = []
+
+        self.reserves: dict[str, tuple[str, int]] = {}
 
         self.block_bump = 0
 
@@ -358,7 +388,7 @@ class NasmAmd64Linux:
             )
             self._inst("movzx rax, al")
             self._inst("push rax")
-        elif word == "-":
+        elif word == "neg":
             self._inst("pop rax")
             self._inst("neg rax")
             self._inst("push rax")
@@ -386,7 +416,18 @@ class NasmAmd64Linux:
             self._inst("syscall")
             self._inst("push rax")
         elif word in self.funcs:
-            self._call(word)
+            self._call(encode_nasm(word))
+        elif word in self.reserves:
+            self._inst(f"push QWORD {encode_nasm(self.reserves[word][0])}")
+        # TODO: implement !8-!64 and @8-@64
+        elif word == "@64":
+            self._inst("pop rax")
+            self._inst("mov rax, QWORD [rax]")
+            self._inst("push rax")
+        elif word == "!64":
+            self._inst("pop rax")  # rax = addr
+            self._inst("pop rbx ")  # rbx = value
+            self._inst("mov QWORD [rax], rbx")
         else:  # ?
             assert False, f"unknown word: {word}"
 
@@ -430,9 +471,12 @@ class NasmAmd64Linux:
         self._inst(f"push {literal}")
 
     def _get_asm(self) -> str:
+        # TODO: don't define unused word
+
         asm: list[str] = [
             "section .bss",
             "__strforth_datastack: resb 4096",
+            *[f"{encode_nasm(name)}: resb {sz}" for name, sz in self.reserves.values()],
             "section .data",
             "__strforth_altstack: dq __strforth_datastack + 4096",
         ]
@@ -444,12 +488,13 @@ class NasmAmd64Linux:
         asm.append("global _start")
         asm.append("_start:")
         for func in self.funcs:
-            asm.append(f"  jmp {func}.end")  # dont execute, but only define
-            asm.append(f"{func}:")
+            _func = encode_nasm(func)
+            asm.append(f"  jmp {_func}.end")  # dont execute, but only define
+            asm.append(f"{_func}:")
             for inst in self.funcs[func]:
                 indent = 0 if inst.endswith(":") else 2
                 asm.append(" " * indent + inst)
-            asm.append(f"{func}.end:")
+            asm.append(f"{_func}.end:")
         for inst in self.toplevel:
             indent = 0 if inst.endswith(":") else 2
             asm.append(" " * indent + inst)
@@ -494,6 +539,9 @@ class NasmAmd64Linux:
                 self._process_node(ii)
             self._finalize_fn()
 
+    def _reservation(self, size: int, name: str):
+        self.reserves[name] = (f"__strforth_reserve_{len(self.reserves)}", size)
+
     def _process_node(self, node: AstNode):
         if isinstance(node, LiteralValue):
             if isinstance(node.value, str):
@@ -511,6 +559,8 @@ class NasmAmd64Linux:
                 self._conditional(node.inner)
             elif node.kind == "loop":
                 self._loop(node.inner)
+        elif isinstance(node, Reservation):
+            self._reservation(node.size, node.name)
         else:
             assert False, type(node)
 
